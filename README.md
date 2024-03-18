@@ -10,3 +10,9 @@ Command to generate ssim score between final images and final images with patch
 ```bash
 python3 ssim_score_gen.py output_images output_images_patch
 ```
+
+Go into project folder and then run 
+
+```bash
+./automation.sh
+```
