@@ -11,9 +11,10 @@ def calculate_ssim(folder1, folder2):
     file_names = []
     ssim_scores = []
     folder2_subfolders = []
-    
     files1 = sorted(os.listdir(folder1))
-    subfolders = [f.path for f in os.scandir(folder2) if f.is_dir()]
+    if ".DS_Store" in files1:
+        files1.remove(".DS_Store")
+    subfolders = [f.path for f in os.scandir(folder2) if f.is_dir() and not f.name.startswith('.')]
     
     for subfolder in subfolders:
         files2 = sorted(os.listdir(subfolder))
@@ -47,4 +48,13 @@ args = parser.parse_args()
 
 # Calculate SSIM and display the table
 ssim_df = calculate_ssim(args.folder1, args.folder2)
-print(ssim_df)
+ssim_df.to_csv('output.csv', index=False)
+
+result = ssim_df.groupby('Subfolder')['SSIM Score'].mean()
+
+# Convert the result Series to a DataFrame
+output_df = result.reset_index()
+
+# Save the result to a CSV file
+output_df.to_csv('output_summary.csv', index=False)
+
