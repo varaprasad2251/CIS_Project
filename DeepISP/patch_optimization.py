@@ -19,8 +19,7 @@ from load_data import load_testing_data, load_testing_inp
 import time
 
 
-PATCH_HEIGHT = 224
-PATCH_WIDTH = 224
+PATCH_HEIGHT, PATCH_WIDTH = 224, 224
 
 parser = argparse.ArgumentParser()
 
@@ -29,15 +28,11 @@ parser.add_argument('-dataset' ,'--dataset_path', type = str, default = './DeepI
 parser.add_argument('-path' ,'--main_path', type = str, default = './DeepISP/' , help = 'main path where the result/experiment folders are stored')
 parser.add_argument('-res' ,'--results_folder', type = str, default = 'results' , help = 'folder to save inference results')
 
-
-
 args = parser.parse_args()
 weights_file = args.weights_file
 dataset_dir = args.dataset_path
 current_path = args.main_path
 res_folder = args.results_folder
-
-# os.mkdir(os.path.join(current_path,res_folder))
 
 def clip_eps(tensor, eps):
 	# clip the values of the tensor to a given range and return it
@@ -58,8 +53,8 @@ def load_image(image_path):
     if I.shape[0] != PATCH_HEIGHT or I.shape[1] != PATCH_WIDTH:
         raise ValueError("Extracted patch does not match specified dimensions: ({}, {}).".format(PATCH_WIDTH, PATCH_HEIGHT))
 
-    # Create an array to hold the image in the expected format
-    raw_img = np.zeros((1, PATCH_HEIGHT, PATCH_WIDTH, 4))  # Assuming the extracted image has 4 channels
+    # array to hold the image in the expected format
+    raw_img = np.zeros((1, PATCH_HEIGHT, PATCH_WIDTH, 4))
     raw_img[0, :] = I
 
     return raw_img
@@ -68,8 +63,8 @@ def save_image(patched_image, file_path):
     patched_image = np.uint8(patched_image * 255.0)  # Convert from [0, 1] to [0, 255]
     imageio.imwrite(file_path, patched_image)
 
-# Define the model (assuming a pretrained ResNet-50 for example)
-def get_model():
+# To Load the DeepISP model with pre-trained weights
+def load_model():
     in_shape = (224,224,4)
     base_vgg = VGG16(weights = 'imagenet', include_top = False, input_shape = (448,448,3))
     vgg = Model(inputs = base_vgg.input, outputs = base_vgg.get_layer('block4_pool').output)
@@ -88,34 +83,38 @@ def ssim_loss(original, modified):
     return torch.tensor(1 - score)  # 1 - SSIM to minimize the loss
 
 # FGSM attack to optimize the patch
-def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold):
-    image_height, image_width = image.shape[1], image.shape[2]
-    print("Image shape: ", image.shape)
-    patch_size = (int(image_height * 0.1), int(image_width * 0.1)) # To adjust Patch Size
+def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
     original_image,_,_,_,_ = model.predict(image)
-    print(original_image.shape)
+    
+    image_height, image_width = image.shape[1], image.shape[2]
+    # print("Image shape: ", image.shape)
+    patch_ratio = (size ** 0.5) / 10
+    patch_size = (int(image_height * patch_ratio), int(image_width * patch_ratio)) # To adjust Patch Size
+
     # Patch Location - Centre of Image
     top_left_x = (image_width - patch_size[0]) // 2
     top_left_y = (image_height - patch_size[1]) // 2
-
     patch = tf.Variable(tf.random.uniform([1, patch_size[1], patch_size[0], 4], dtype=tf.float32, minval=0, maxval=1))
-    print("Patch initial shape:", patch.shape)  # Debug statement
-    print("Patch elements:", tf.size(patch).numpy())
-    best_patch = tf.identity(patch)
+    
+    # print("Patch initial shape:", patch.shape)
+    # print("Patch elements:", tf.size(patch).numpy())
+    # best_patch = tf.identity(patch)
+    
     best_ssim = float('inf')
     best_patched_image = tf.identity(original_image)
-    image = tf.cast(image, tf.float32) / 255.0
+    image = tf.cast(image, tf.float32) # / 255.0
 
     for i in range(max_iterations):
         with tf.GradientTape() as tape:
             tape.watch(patch)
             patched_image = tf.identity(image)
-            # print("Reshaping patch to:", patch_size[1], patch_size[0], 4) 
-            patch_values = tf.reshape(patch, [patch_size[1], patch_size[0], 4])  # Ensure correct reshape
+            # patch_values = tf.reshape(patch, [patch_size[1], patch_size[0], 4])  # Ensure correct reshape
             indices = [[0, y, x, c] for y in range(top_left_y, top_left_y + patch_size[1])
                                     for x in range(top_left_x, top_left_x + patch_size[0])
                                     for c in range(4)]
-            patched_image = tf.tensor_scatter_nd_update(patched_image, indices, tf.reshape(patch_values, [-1]))
+            # patched_image = tf.tensor_scatter_nd_update(patched_image, indices, tf.reshape(patch_values, [-1]))
+            patch_values = tf.reshape(patch, [-1])
+            patched_image = tf.tensor_scatter_nd_update(patched_image, indices, patch_values)
             # output_with_patch,_, _, _, _ = model.predict(patched_image)
             output_with_patch,_, _, _, _ = model(patched_image, training=False)
             loss = 1 - tf.reduce_mean(tf.image.ssim(original_image[0], output_with_patch[0], max_val=1.0))
@@ -126,7 +125,7 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold):
 
         if loss.numpy() < best_ssim:
             best_ssim = loss.numpy()
-            best_patch = tf.identity(patch)
+            # best_patch = tf.identity(patch)
             best_patched_image = tf.identity(output_with_patch)
         
         if best_ssim < loss_threshold:
@@ -144,7 +143,7 @@ def process_raw_images(model):
     t = (t2-t1)/raw_imgs.shape[0]
     print(t)
     for i in range(out.shape[0]):
-        I = np.uint8(out[i,:,:,:]*255.0)
+        I = np.uint8(out[i,:,:,:] * 255.0)
         imageio.imwrite(os.path.join(current_path, res_folder) + '/' +  str(i) + '.png', I)
     
 # Main function to run the attack
@@ -153,16 +152,16 @@ def main():
     image = load_image(image_path)
     # image = load_testing_inp(dataset_dir, 224, 224)[0,:,:,:]
     epsilon = 0.01  # Perturbation level
-    max_iterations = 3
-    loss_threshold = 1
-    d_model = get_model()
-    original_image, best_patched_image = fgsm_patch(image, d_model, epsilon, max_iterations, loss_threshold)
+    max_iterations = 10
+    loss_threshold = 0.005
+    d_model = load_model()
+    original_image, best_patched_image = fgsm_patch(image, d_model, epsilon, max_iterations, loss_threshold, 10)
     print(f"Shapes: {original_image.shape} {best_patched_image.shape}")
     output_path = os.path.join(current_path, res_folder) + '/'
-    save_image(np.uint8(best_patched_image[0]*255.0), output_path + "best_patch_image.png")
-    save_image(np.uint8(original_image[0]*255.0), output_path + "original_image.png")
+    save_image(best_patched_image[0,:,:,:]*255.0, output_path + "best_patch_image.png")
+    save_image(original_image[0,:,:,:]*255.0, output_path + "original_image.png")
     print("Optimized patch generated and saved.")
-    process_raw_images(d_model)
+    # process_raw_images(d_model)
 
 if __name__ == "__main__":
     main()
