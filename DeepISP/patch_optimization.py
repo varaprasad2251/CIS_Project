@@ -132,7 +132,7 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold):
         if best_ssim < loss_threshold:
             break
 
-    return original_image, best_patched_image
+    return np.uint8(original_image*255.0), np.uint8(best_patched_image*255.0)
 
 
 def process_raw_images(model):
