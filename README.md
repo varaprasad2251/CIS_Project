@@ -26,3 +26,14 @@ python3 DeepISP/patch_optimization.py -in 1115
 
 
 
+Command to run object Detection code from the project root directory.
+```bash
+python3 YOLO/YOLOv8.py -in 1115
+```
+
+**in** is the input file number from DeepISP/patch_results folder. eg: 1115
+
+
+
+
+
