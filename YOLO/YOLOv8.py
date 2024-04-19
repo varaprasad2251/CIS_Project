@@ -27,6 +27,7 @@ for result in results:
     masks = result.masks  # Masks object for segmentation masks outputs
     keypoints = result.keypoints  # Keypoints object for pose outputs
     probs = result.probs  # Probs object for classification outputs
+    # print(result)
     result.show()  # display to screen
     result.save(filename=result_paths[idx])
     idx+=1

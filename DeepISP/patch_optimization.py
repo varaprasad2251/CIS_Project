@@ -166,9 +166,9 @@ def process_raw_images(model):
         imageio.imwrite(os.path.join(current_path, res_folder) + '/' +  str(i) + '.png', I)
 
 def main():
-    epsilon = 0.2 / 255.0  # Perturbation level
+    epsilon = 0.05 / 255.0  # Perturbation level
     max_iterations = 20 # Max Iterations for FGSM
-    loss_threshold = 0.1 # Loss Threshold
+    loss_threshold = 0.02 # Loss Threshold
 
     image_path = current_path + "input_raw_images/" + input_file_name + ".png"
     image = load_image(image_path)
