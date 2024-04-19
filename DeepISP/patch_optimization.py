@@ -97,7 +97,7 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
     image = tf.cast(image, tf.float32)
     # patch = tf.Variable(tf.random.uniform([1, patch_size[1], patch_size[0], 4], dtype=tf.float32, minval=0, maxval=1))
     patch = tf.Variable(image[:, top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :], dtype=tf.float32)
-    perturbation = tf.random.uniform(patch.shape, minval=-epsilon, maxval=epsilon, dtype=tf.float32)
+    perturbation = tf.random.uniform(patch.shape, minval=-epsilon*10, maxval=epsilon*10, dtype=tf.float32)
     patch.assign(tf.clip_by_value(patch + perturbation, 0, 1))
     # Add a small epsilon perturbation to all cells of the patch area
     # patch += perturbation
@@ -158,9 +158,9 @@ def main():
     image_path = current_path + 'input_raw_images/0.png'
     image = load_image(image_path)
     # image = load_testing_inp(dataset_dir, 224, 224)[0,:,:,:]
-    epsilon = 0.01  # Perturbation level
+    epsilon = 2 / 255.0  # Perturbation level
     max_iterations = 10
-    loss_threshold = 0.005
+    loss_threshold = 0.01
     d_model = load_model()
     original_image, best_patched_image = fgsm_patch(image, d_model, epsilon, max_iterations, loss_threshold, 10)
     print(f"Shapes: {original_image.shape} {best_patched_image.shape}")
