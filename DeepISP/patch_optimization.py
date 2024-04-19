@@ -26,13 +26,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-w' ,'--weights_file', type = str, default = 'weights2_0191.h5' , help = 'best weight file name (only prefix while evaluating)')
 parser.add_argument('-dataset' ,'--dataset_path', type = str, default = './DeepISP/input_raw_images/' , help = 'complete path for the dataset')
 parser.add_argument('-path' ,'--main_path', type = str, default = './DeepISP/' , help = 'main path where the result/experiment folders are stored')
-parser.add_argument('-res' ,'--results_folder', type = str, default = 'results' , help = 'folder to save inference results')
+parser.add_argument('-res' ,'--results_folder', type = str, default = 'patch_results' , help = 'folder to save patch results')
+parser.add_argument('-in' ,'--input_file_name', type = str, default = '0' , help = 'input image file name')
 
 args = parser.parse_args()
 weights_file = args.weights_file
 dataset_dir = args.dataset_path
 current_path = args.main_path
 res_folder = args.results_folder
+input_file_name = args.input_file_name
 
 def clip_eps(tensor, eps):
 	# clip the values of the tensor to a given range and return it
@@ -97,7 +99,7 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
     image = tf.cast(image, tf.float32)
     # patch = tf.Variable(tf.random.uniform([1, patch_size[1], patch_size[0], 4], dtype=tf.float32, minval=0, maxval=1))
     patch = tf.Variable(image[:, top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :], dtype=tf.float32)
-    perturbation = tf.random.uniform(patch.shape, minval=-epsilon*10, maxval=epsilon*10, dtype=tf.float32)
+    perturbation = tf.random.uniform(patch.shape, minval=-epsilon, maxval=epsilon, dtype=tf.float32)
     patch.assign(tf.clip_by_value(patch + perturbation, 0, 1))
     # Add a small epsilon perturbation to all cells of the patch area
     # patch += perturbation
@@ -124,9 +126,9 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
             loss = 1 - tf.reduce_mean(tf.image.ssim(original_image[0], output_with_patch[0], max_val=1.0))
             print(loss)
         gradients = tape.gradient(loss, patch)
-        print("Type of patch:", type(patch))
-        print("Min value of patch:", tf.reduce_min(patch))
-        print("Max value of patch:", tf.reduce_max(patch))
+        # print("Type of patch:", type(patch))
+        # print("Min value of patch:", tf.reduce_min(patch))
+        # print("Max value of patch:", tf.reduce_max(patch))
         patch.assign_add(epsilon * tf.sign(gradients))
         patch.assign(tf.clip_by_value(patch, 0, 1))  # Ensure the values remain in [0, 1]
 
@@ -155,20 +157,25 @@ def process_raw_images(model):
     
 # Main function to run the attack
 def main():
-    image_path = current_path + 'input_raw_images/0.png'
+    epsilon = 10 / 255.0  # Perturbation level
+    max_iterations = 10 # Max Iterations for FGSM
+    loss_threshold = 0.01 # Loss Threshold
+
+    image_path = current_path + "input_raw_images/" + input_file_name + ".png"
     image = load_image(image_path)
-    # image = load_testing_inp(dataset_dir, 224, 224)[0,:,:,:]
-    epsilon = 2 / 255.0  # Perturbation level
-    max_iterations = 10
-    loss_threshold = 0.01
-    d_model = load_model()
-    original_image, best_patched_image = fgsm_patch(image, d_model, epsilon, max_iterations, loss_threshold, 10)
-    print(f"Shapes: {original_image.shape} {best_patched_image.shape}")
+    
+    model = load_model() # Load DeepISP model
+
+    original_image, patched_image = fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, 10)
+    # print(f"Shapes: {original_image.shape} {patched_image.shape}")
+
     output_path = os.path.join(current_path, res_folder) + '/'
-    save_image(best_patched_image[0,:,:,:]*255.0, output_path + "best_patch_image.png")
-    save_image(original_image[0,:,:,:]*255.0, output_path + "original_image.png")
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+    
+    save_image(patched_image[0,:,:,:] * 255.0, output_path + "patch_image_" + input_file_name + ".png")
+    save_image(original_image[0,:,:,:] * 255.0, output_path + "original_image_" + input_file_name + ".png")
     print("Optimized patch generated and saved.")
-    # process_raw_images(d_model)
 
 if __name__ == "__main__":
     main()
