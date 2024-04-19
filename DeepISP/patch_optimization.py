@@ -94,15 +94,19 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
     # Patch Location - Centre of Image
     top_left_x = (image_width - patch_size[0]) // 2
     top_left_y = (image_height - patch_size[1]) // 2
-    patch = tf.Variable(tf.random.uniform([1, patch_size[1], patch_size[0], 4], dtype=tf.float32, minval=0, maxval=1))
-    
+    image = tf.cast(image, tf.float32)
+    # patch = tf.Variable(tf.random.uniform([1, patch_size[1], patch_size[0], 4], dtype=tf.float32, minval=0, maxval=1))
+    patch = tf.Variable(image[:, top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :], dtype=tf.float32)
+    perturbation = tf.random.uniform(patch.shape, minval=-epsilon, maxval=epsilon, dtype=tf.float32)
+    patch.assign(tf.clip_by_value(patch + perturbation, 0, 1))
+    # Add a small epsilon perturbation to all cells of the patch area
+    # patch += perturbation
     # print("Patch initial shape:", patch.shape)
     # print("Patch elements:", tf.size(patch).numpy())
     # best_patch = tf.identity(patch)
     
     best_ssim = float('inf')
-    best_patched_image = tf.identity(original_image)
-    image = tf.cast(image, tf.float32) # / 255.0
+    best_patched_image = tf.identity(original_image) # / 255.0
 
     for i in range(max_iterations):
         with tf.GradientTape() as tape:
@@ -120,6 +124,9 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
             loss = 1 - tf.reduce_mean(tf.image.ssim(original_image[0], output_with_patch[0], max_val=1.0))
             print(loss)
         gradients = tape.gradient(loss, patch)
+        print("Type of patch:", type(patch))
+        print("Min value of patch:", tf.reduce_min(patch))
+        print("Max value of patch:", tf.reduce_max(patch))
         patch.assign_add(epsilon * tf.sign(gradients))
         patch.assign(tf.clip_by_value(patch, 0, 1))  # Ensure the values remain in [0, 1]
 
