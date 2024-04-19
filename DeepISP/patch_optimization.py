@@ -1,11 +1,4 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torchvision import transforms
-from torchvision.models import resnet50
-from skimage.metrics import structural_similarity as ssim
 import numpy as np
-from PIL import Image
 from load_data import extract_bayer_channels
 import tensorflow as tf
 from keras.models import Model
@@ -15,7 +8,7 @@ import argparse
 import os
 from network import network
 import imageio.v2 as imageio
-from load_data import load_testing_data, load_testing_inp
+from load_data import load_testing_inp
 import time
 
 
@@ -43,22 +36,13 @@ def clip_eps(tensor, eps):
 
 # Load and preprocess the image
 def load_image(image_path):
-    # I = np.asarray(imageio.imread(image_path))
-    # I = extract_bayer_channels(I)
-    # return np.expand_dims(I, axis=0)
-
     I = np.asarray(imageio.imread(image_path))
-
-    # Apply Bayer channel extraction
+    # Bayer channel extraction
     I = extract_bayer_channels(I)
-
     if I.shape[0] != PATCH_HEIGHT or I.shape[1] != PATCH_WIDTH:
         raise ValueError("Extracted patch does not match specified dimensions: ({}, {}).".format(PATCH_WIDTH, PATCH_HEIGHT))
-
-    # array to hold the image in the expected format
     raw_img = np.zeros((1, PATCH_HEIGHT, PATCH_WIDTH, 4))
     raw_img[0, :] = I
-
     return raw_img
 
 def save_image(patched_image, file_path):
@@ -91,7 +75,7 @@ def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./De
     top_left_y = (image_height - patch_size[1]) // 2
     
     # Create a white patch
-    white_patch = np.ones((patch_size[1], patch_size[0], 3), dtype=np.uint8) * 255
+    white_patch = np.zeros((patch_size[1], patch_size[0], 3), dtype=np.uint8) * 255
     
     # Overlay the white patch on the original image
     original_image_with_white_patch = original_image[0].numpy()
@@ -110,7 +94,7 @@ def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./De
     imageio.imwrite(save_path + 'patched_image_with_white_patch.png', patched_image_with_white_patch_uint8)
     
     # Calculate SSIM for the entire image
-    total_ssim = tf.reduce_mean(tf.image.ssim(original_image, patched_image, max_val=1.0)).numpy()
+    total_ssim = tf.reduce_mean(tf.image.ssim(original_image[0], patched_image[0], max_val=1.0)).numpy()
     
     # Calculate SSIM for the non-patched areas
     non_patch_ssim = tf.reduce_mean(tf.image.ssim(original_image_with_white_patch_uint8, patched_image_with_white_patch_uint8, max_val=1.0)).numpy()
@@ -120,20 +104,11 @@ def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./De
     
     return total_ssim, non_patch_ssim
 
-
-# SSIM loss function
-def ssim_loss(original, modified):
-    original = original.detach().cpu().numpy()
-    modified = modified.detach().cpu().numpy()
-    score = ssim(original, modified, data_range=modified.max() - modified.min(), multichannel=True)
-    return torch.tensor(1 - score)  # 1 - SSIM to minimize the loss
-
 # FGSM attack to optimize the patch
 def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
     original_image,_,_,_,_ = model.predict(image)
     
     image_height, image_width = image.shape[1], image.shape[2]
-    # print("Image shape: ", image.shape)
     patch_ratio = (size ** 0.5) / 10
     patch_size = (int(image_height * patch_ratio), int(image_width * patch_ratio)) # To adjust Patch Size
 
@@ -141,48 +116,38 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
     top_left_x = (image_width - patch_size[0]) // 2
     top_left_y = (image_height - patch_size[1]) // 2
     image = tf.cast(image, tf.float32)
+
     # patch = tf.Variable(tf.random.uniform([1, patch_size[1], patch_size[0], 4], dtype=tf.float32, minval=0, maxval=1))
     patch = tf.Variable(image[:, top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :], dtype=tf.float32)
     perturbation = tf.random.uniform(patch.shape, minval=-epsilon, maxval=epsilon, dtype=tf.float32)
     patch.assign(tf.clip_by_value(patch + perturbation, 0, 1))
-    # Add a small epsilon perturbation to all cells of the patch area
-    # patch += perturbation
-    # print("Patch initial shape:", patch.shape)
-    # print("Patch elements:", tf.size(patch).numpy())
-    # best_patch = tf.identity(patch)
-    
-    best_ssim = float('inf')
-    best_patched_image = tf.identity(original_image) # / 255.0
+    max_loss = float('-inf')
+    best_patched_image = tf.identity(original_image)
 
     for i in range(max_iterations):
         with tf.GradientTape() as tape:
             tape.watch(patch)
             patched_image = tf.identity(image)
-            # patch_values = tf.reshape(patch, [patch_size[1], patch_size[0], 4])  # Ensure correct reshape
             indices = [[0, y, x, c] for y in range(top_left_y, top_left_y + patch_size[1])
                                     for x in range(top_left_x, top_left_x + patch_size[0])
                                     for c in range(4)]
-            # patched_image = tf.tensor_scatter_nd_update(patched_image, indices, tf.reshape(patch_values, [-1]))
             patch_values = tf.reshape(patch, [-1])
             patched_image = tf.tensor_scatter_nd_update(patched_image, indices, patch_values)
-            # output_with_patch,_, _, _, _ = model.predict(patched_image)
             output_with_patch,_, _, _, _ = model(patched_image, training=False)
             loss = 1 - tf.reduce_mean(tf.image.ssim(original_image[0], output_with_patch[0], max_val=1.0))
-            print(loss)
+            print(f"Current Iteration : {i+1}, " , "SSIM Score : ", tf.image.ssim(original_image[0], output_with_patch[0], max_val=1.0).numpy(), ", Loss : ", loss.numpy())
         gradients = tape.gradient(loss, patch)
-        # print("Type of patch:", type(patch))
-        # print("Min value of patch:", tf.reduce_min(patch))
-        # print("Max value of patch:", tf.reduce_max(patch))
         patch.assign_add(epsilon * tf.sign(gradients))
-        patch.assign(tf.clip_by_value(patch, 0, 1))  # Ensure the values remain in [0, 1]
-
-        if loss.numpy() < best_ssim:
-            best_ssim = loss.numpy()
-            # best_patch = tf.identity(patch)
-            best_patched_image = tf.identity(output_with_patch)
+        patch.assign(tf.clip_by_value(patch, 0, 1))
         
-        if best_ssim < loss_threshold:
+        if loss.numpy() > loss_threshold:
+            print(f"Exceeded Loss Threshold ----- Exiting the Loop")
             break
+
+        if loss.numpy() > max_loss:
+            max_loss = loss.numpy()
+            best_patched_image = tf.identity(output_with_patch)
+    
     evaluate_ssim_impact(np.uint8(original_image*255.0),np.uint8(best_patched_image*255.0))
 
     return np.uint8(original_image*255.0), np.uint8(best_patched_image*255.0)
@@ -199,12 +164,11 @@ def process_raw_images(model):
     for i in range(out.shape[0]):
         I = np.uint8(out[i,:,:,:] * 255.0)
         imageio.imwrite(os.path.join(current_path, res_folder) + '/' +  str(i) + '.png', I)
-    
-# Main function to run the attack
+
 def main():
-    epsilon = 10 / 255.0  # Perturbation level
-    max_iterations = 10 # Max Iterations for FGSM
-    loss_threshold = 0.01 # Loss Threshold
+    epsilon = 0.2 / 255.0  # Perturbation level
+    max_iterations = 20 # Max Iterations for FGSM
+    loss_threshold = 0.1 # Loss Threshold
 
     image_path = current_path + "input_raw_images/" + input_file_name + ".png"
     image = load_image(image_path)
@@ -212,7 +176,6 @@ def main():
     model = load_model() # Load DeepISP model
 
     original_image, patched_image = fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, 10)
-    # print(f"Shapes: {original_image.shape} {patched_image.shape}")
 
     output_path = os.path.join(current_path, res_folder) + '/'
     if not os.path.exists(output_path):
