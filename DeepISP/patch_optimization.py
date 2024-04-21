@@ -10,6 +10,8 @@ from network import network
 import imageio.v2 as imageio
 from load_data import load_testing_inp
 import time
+import cv2
+from skimage.metrics import structural_similarity as compare_ssim
 
 
 PATCH_HEIGHT, PATCH_WIDTH = 224, 224
@@ -20,7 +22,7 @@ parser.add_argument('-w' ,'--weights_file', type = str, default = 'weights2_0191
 parser.add_argument('-dataset' ,'--dataset_path', type = str, default = './DeepISP/input_raw_images/' , help = 'complete path for the dataset')
 parser.add_argument('-path' ,'--main_path', type = str, default = './DeepISP/' , help = 'main path where the result/experiment folders are stored')
 parser.add_argument('-res' ,'--results_folder', type = str, default = 'patch_results' , help = 'folder to save patch results')
-parser.add_argument('-in' ,'--input_file_name', type = str, default = '0' , help = 'input image file name')
+parser.add_argument('-in' ,'--input_file_name', type = str, default = '663' , help = 'input image file name')
 
 args = parser.parse_args()
 weights_file = args.weights_file
@@ -64,6 +66,9 @@ def load_model():
 def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./DeepISP/masked_images/'):
     # Assuming original_image and patched_image are already preprocessed and in the correct format
     # Convert to float32 for TensorFlow operations
+    original_image = np.uint8(original_image*255.0)
+    patched_image = np.uint8(patched_image*255.0)
+    
     original_image = tf.cast(original_image, tf.float32)
     patched_image = tf.cast(patched_image, tf.float32)
     
@@ -75,34 +80,35 @@ def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./De
     top_left_y = (image_height - patch_size[1]) // 2
     
     # Create a white patch
-    white_patch = np.zeros((patch_size[1], patch_size[0], 3), dtype=np.uint8) * 255
+    black_patch = np.zeros((patch_size[1], patch_size[0], 3), dtype=np.uint8) * 255
     
     # Overlay the white patch on the original image
-    original_image_with_white_patch = original_image[0].numpy()
-    original_image_with_white_patch[top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :] = white_patch
+    original_image_with_black_patch = original_image[0].numpy()
+    original_image_with_black_patch[top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :] = black_patch
     
     # Overlay the white patch on the patched image
-    patched_image_with_white_patch = patched_image[0].numpy()
-    patched_image_with_white_patch[top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :] = white_patch
+    patched_image_with_black_patch = patched_image[0].numpy()
+    patched_image_with_black_patch[top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :] = black_patch
     
     # Convert the images to uint8 and ensure they are in a format that imageio can handle
-    original_image_with_white_patch_uint8 = np.clip(original_image_with_white_patch, 0, 255).astype(np.uint8)
-    patched_image_with_white_patch_uint8 = np.clip(patched_image_with_white_patch, 0, 255).astype(np.uint8)
+    original_image_with_black_patch_uint8 = np.clip(original_image_with_black_patch, 0, 255).astype(np.uint8)
+    patched_image_with_black_patch_uint8 = np.clip(patched_image_with_black_patch, 0, 255).astype(np.uint8)
     
     # Save the original image with the white patch and the patched image with the white patch
-    imageio.imwrite(save_path + 'original_with_white_patch.png', original_image_with_white_patch_uint8)
-    imageio.imwrite(save_path + 'patched_image_with_white_patch.png', patched_image_with_white_patch_uint8)
-    
-    # Calculate SSIM for the entire image
-    total_ssim = tf.reduce_mean(tf.image.ssim(original_image[0], patched_image[0], max_val=1.0)).numpy()
+    imageio.imwrite(save_path + 'original_with_black_patch.png', original_image_with_black_patch_uint8)
+    imageio.imwrite(save_path + 'patched_image_with_black_patch.png', patched_image_with_black_patch_uint8)
     
     # Calculate SSIM for the non-patched areas
-    non_patch_ssim = tf.reduce_mean(tf.image.ssim(original_image_with_white_patch_uint8, patched_image_with_white_patch_uint8, max_val=1.0)).numpy()
+    #non_patch_ssim = tf.reduce_mean(tf.image.ssim(original_image_with_black_patch_uint8, patched_image_with_black_patch_uint8, max_val=1.0)).numpy()
 
-    print("The SSIM score between original and patch image is {0}".format(total_ssim))
+    original_image = cv2.imread(save_path + 'original_with_black_patch.png', cv2.IMREAD_GRAYSCALE)
+    patched_image = cv2.imread(save_path + 'patched_image_with_black_patch.png', cv2.IMREAD_GRAYSCALE)
+
+    # Compute SSIM
+    non_patch_ssim = compare_ssim(original_image, patched_image)
     print("SSIM score of the image without the patch area is {0}".format(non_patch_ssim))
     
-    return total_ssim, non_patch_ssim
+    return non_patch_ssim
 
 # FGSM attack to optimize the patch
 def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
@@ -148,7 +154,7 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
             max_loss = loss.numpy()
             best_patched_image = tf.identity(output_with_patch)
     
-    evaluate_ssim_impact(np.uint8(original_image*255.0),np.uint8(best_patched_image*255.0))
+    evaluate_ssim_impact(original_image, best_patched_image)
 
     return np.uint8(original_image*255.0), np.uint8(best_patched_image*255.0)
 
