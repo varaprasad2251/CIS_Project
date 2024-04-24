@@ -11,8 +11,8 @@ import imageio.v2 as imageio
 from load_data import load_testing_inp
 import time
 import cv2
-from skimage.metrics import structural_similarity as compare_ssim
-
+from skimage.metrics import structural_similarity as ssim
+import pandas as pd
 
 PATCH_HEIGHT, PATCH_WIDTH = 224, 224
 
@@ -22,22 +22,41 @@ parser.add_argument('-w' ,'--weights_file', type = str, default = 'weights2_0191
 parser.add_argument('-dataset' ,'--dataset_path', type = str, default = './DeepISP/input_raw_images/' , help = 'complete path for the dataset')
 parser.add_argument('-path' ,'--main_path', type = str, default = './DeepISP/' , help = 'main path where the result/experiment folders are stored')
 parser.add_argument('-res' ,'--results_folder', type = str, default = 'patch_results' , help = 'folder to save patch results')
+parser.add_argument('-orig' ,'--orig_images_folder', type = str, default = 'Zurich_Original' , help = 'Folder containing original images from Zurich Dataset')
 parser.add_argument('-in' ,'--input_file_name', type = str, default = '663' , help = 'input image file name')
+parser.add_argument('-tmp' ,'--tmp_path', type = str, default = 'false' , help = 'if output images need to be stored in results/tmp path')
 
 args = parser.parse_args()
 weights_file = args.weights_file
 dataset_dir = args.dataset_path
 current_path = args.main_path
 res_folder = args.results_folder
+orig_img_folder = args.orig_images_folder
 input_file_name = args.input_file_name
+tmp_path = args.tmp_path
 
 def clip_eps(tensor, eps):
 	# clip the values of the tensor to a given range and return it
 	return tf.clip_by_value(tensor, clip_value_min=-eps,
 		clip_value_max=eps)
 
+def load_original_image(image_path):
+    # Read the image using imageio
+    img = imageio.imread(image_path)
+
+    # # Convert the image into a PIL Image object to check and modify the format if necessary
+    # img_pil = Image.fromarray(img)
+    
+    # # Ensure the image is in RGB format (for the case of grayscale or single channel images)
+    # if img_pil.mode != 'RGB':
+    #     img_pil = img_pil.convert('RGB')
+
+    # # Convert the PIL Image back to a NumPy array
+    # img_array = np.array(img_pil)
+    # print(img.shape)
+    return img
 # Load and preprocess the image
-def load_image(image_path):
+def load_raw_image(image_path):
     I = np.asarray(imageio.imread(image_path))
     # Bayer channel extraction
     I = extract_bayer_channels(I)
@@ -105,7 +124,7 @@ def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./De
     patched_image = cv2.imread(save_path + 'patched_image_with_black_patch.png', cv2.IMREAD_GRAYSCALE)
 
     # Compute SSIM
-    non_patch_ssim = compare_ssim(original_image, patched_image)
+    non_patch_ssim = ssim(original_image, patched_image)
     print("SSIM score of the image without the patch area is {0}".format(non_patch_ssim))
     
     return non_patch_ssim
@@ -170,26 +189,97 @@ def process_raw_images(model):
     for i in range(out.shape[0]):
         I = np.uint8(out[i,:,:,:] * 255.0)
         imageio.imwrite(os.path.join(current_path, res_folder) + '/' +  str(i) + '.png', I)
+        
+
+def compute_ssim_for_folder(original_folder, raw_folder):
+    """
+    Computes SSIM for all images in the original folder against processed images derived from raw images.
+    Parameters:
+        original_folder (str): Path to the folder containing the original images.
+        raw_folder (str): Path to the folder containing the raw images.
+    """
+    # List all files in the original images folder
+    original_files = [f for f in os.listdir(original_folder) if f.endswith('.png') or f.endswith('.jpg')]
+    
+    ssim_scores = []
+    model = load_model()
+    for file_name in original_files:
+        original_path = os.path.join(original_folder, file_name)
+        base_name = os.path.splitext(file_name)[0]
+        raw_path_png = os.path.join(raw_folder, base_name + '.png')
+        raw_path_jpg = os.path.join(raw_folder, base_name + '.jpg')
+
+        # Determine the correct path if it exists
+        if os.path.exists(raw_path_png):
+            raw_path = raw_path_png
+        elif os.path.exists(raw_path_jpg):
+            raw_path = raw_path_jpg
+        else:
+            print(f"Skipping {file_name}: No corresponding raw file found.")
+            continue
+        
+        # Load images
+        original_img = load_original_image(original_path)
+        raw_img = load_raw_image(raw_path)
+
+        # Predict or process the raw image
+        img,_,_,_,_ = model.predict(raw_img)
+        img = np.squeeze(img, axis=0)
+        processed_img = np.uint8(img * 255.0)
+
+        # Compute SSIM
+        score1 = ssim(original_img, original_img, channel_axis=-1, data_range=255)
+        score2 = ssim(original_img, processed_img, channel_axis=-1, data_range=255)
+        ssim_scores.append({'Filename': file_name, 'Orig vs Orig': score1, 'Orig vs Proc': score2})
+    results_df = pd.DataFrame(ssim_scores)
+        # print(results_df)
+        # print(f"SSIM for {file_name}: {score}")
+
+    return results_df
+
 
 def main():
-    epsilon = 0.05 / 255.0  # Perturbation level
-    max_iterations = 20 # Max Iterations for FGSM
-    loss_threshold = 0.02 # Loss Threshold
+    epsilon = 0.1 / 255.0  # Perturbation level
+    max_iterations = 15 # Max Iterations for FGSM
+    loss_threshold = 0.01 # Loss Threshold
 
     image_path = current_path + "input_raw_images/" + input_file_name + ".png"
-    image = load_image(image_path)
+    image = load_raw_image(image_path)
     
     model = load_model() # Load DeepISP model
 
     original_image, patched_image = fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, 10)
 
-    output_path = os.path.join(current_path, res_folder) + '/'
+    if tmp_path == 'true':
+        tmp_folder = res_folder + "/tmp"
+        output_path = os.path.join(current_path, tmp_folder) + '/'
+    else:
+        output_path = os.path.join(current_path, res_folder) + '/'
     if not os.path.exists(output_path):
         os.makedirs(output_path)
-    
     save_image(patched_image[0,:,:,:] * 255.0, output_path + "patch_image_" + input_file_name + ".png")
     save_image(original_image[0,:,:,:] * 255.0, output_path + "original_image_" + input_file_name + ".png")
     print("Optimized patch generated and saved.")
 
 if __name__ == "__main__":
-    main()
+    # main()
+    # img1 = load_original_image(current_path + orig_img_folder + "/" + input_file_name + ".jpg")
+    # image_path = current_path + "input_raw_images/" + input_file_name + ".png"
+    # image = load_raw_image(image_path)
+    
+    # model = load_model()
+    # img2,_,_,_,_ = model.predict(image)
+    # img2 = np.squeeze(img2, axis=0)
+    # img2 = np.uint8(img2 * 255.0)
+    
+    # img3 = load_original_image(current_path + res_folder + "/" + "patch_image_" + input_file_name + ".png")
+    # img4 = load_original_image(current_path + res_folder + "/" + "original_image_" + input_file_name + ".png")
+    
+    # print(ssim(img1, img1, channel_axis=-1, data_range=255))
+    # print(ssim(img1, img4, channel_axis=-1, data_range=255))
+    # print(ssim(img1, img3, channel_axis=-1, data_range=255))
+    
+    original_images_folder = current_path + orig_img_folder + "/" 
+    raw_images_folder = current_path + "input_raw_images/"
+    ssim_table = compute_ssim_for_folder(original_images_folder, raw_images_folder)
+    print(ssim_table)

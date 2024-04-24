@@ -6,14 +6,22 @@ import argparse
 parser = argparse.ArgumentParser()
 
 parser.add_argument('-in' ,'--input_file_name', type = str, default = '0' , help = 'input image file name')
+parser.add_argument('-tmp' ,'--tmp_path', type = str, default = 'false' , help = 'if images need to be fetched from results/tmp path')
 args = parser.parse_args()
 input_file_name = args.input_file_name
+tmp_path = args.tmp_path
 
 model = YOLO('yolov8n.pt')  # load a pretrained YOLOv8n detection model
 # model.train(data='coco128.yaml', epochs=3)  # Uncomment to train the model
 
-image_path = os.getcwd() + "/" + "DeepISP/patch_results/"
-save_dir = os.getcwd() + "/"+ "YOLO/results/"
+
+
+if tmp_path == 'true':
+        image_path = os.getcwd() + "/" + "DeepISP/patch_results/tmp/"
+        save_dir = os.getcwd() + "/"+ "YOLO/results/tmp/"
+else:
+        image_path = os.getcwd() + "/" + "DeepISP/patch_results/"
+        save_dir = os.getcwd() + "/"+ "YOLO/results/"
 
 imgs = [image_path + name + "_" + input_file_name + ".png" for name in ["original_image", "patch_image"]]
 result_paths = [save_dir + name + "_" + input_file_name + ".png" for name in ["original_image", "patch_image"]]
