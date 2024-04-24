@@ -97,37 +97,58 @@ def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./De
 
     top_left_x = (image_width - patch_size[0]) // 2
     top_left_y = (image_height - patch_size[1]) // 2
-    
-    # Create a white patch
     black_patch = np.zeros((patch_size[1], patch_size[0], 3), dtype=np.uint8) * 255
     
-    # Overlay the white patch on the original image
+    # Overlay the black patch on the original image
     original_image_with_black_patch = original_image[0].numpy()
     original_image_with_black_patch[top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :] = black_patch
     
-    # Overlay the white patch on the patched image
+    original_top_rectangle = original_image_with_black_patch[:top_left_y, :, :].astype(np.uint8)
+    imageio.imwrite(save_path + 'original_top_rectangle.png', original_top_rectangle)
+    
+    original_left_square = original_image_with_black_patch[top_left_y :top_left_y + patch_size[1] , :top_left_x, :].astype(np.uint8)
+    imageio.imwrite(save_path + 'original_left_square.png', original_left_square)
+    
+    original_bottom_rectangle = original_image_with_black_patch[ top_left_y + patch_size[1]: , :, :].astype(np.uint8)  
+    imageio.imwrite(save_path + 'original_bottom_rectangle.png',original_bottom_rectangle)
+    
+    original_right_square = original_image_with_black_patch[top_left_y :top_left_y + patch_size[1] , top_left_x + patch_size[0]:, :].astype(np.uint8)
+    imageio.imwrite(save_path + 'original_right_square.png', original_right_square)
+
+    # Overlay the black patch on the patched image
     patched_image_with_black_patch = patched_image[0].numpy()
     patched_image_with_black_patch[top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :] = black_patch
+
+    patched_top_rectangle = original_image_with_black_patch[:top_left_y, :, :].astype(np.uint8)
+    imageio.imwrite(save_path + 'patched_top_rectangle.png', patched_top_rectangle)
     
-    # Convert the images to uint8 and ensure they are in a format that imageio can handle
+    patched_left_square = original_image_with_black_patch[top_left_y :top_left_y + patch_size[1] , :top_left_x, :].astype(np.uint8)
+    imageio.imwrite(save_path + 'patched_left_square.png', patched_left_square)
+    
+    patched_right_square = original_image_with_black_patch[top_left_y :top_left_y + patch_size[1] , top_left_x + patch_size[0]:, :].astype(np.uint8)
+    imageio.imwrite(save_path + 'patched_right_square.png', patched_right_square)
+    
+    patched_bottom_rectangle = original_image_with_black_patch[ top_left_y + patch_size[1]: , :, :].astype(np.uint8)
+    imageio.imwrite(save_path + 'patched_bottom_rectangle.png', patched_bottom_rectangle)
+    
     original_image_with_black_patch_uint8 = np.clip(original_image_with_black_patch, 0, 255).astype(np.uint8)
     patched_image_with_black_patch_uint8 = np.clip(patched_image_with_black_patch, 0, 255).astype(np.uint8)
     
-    # Save the original image with the white patch and the patched image with the white patch
+    # Save the original image with the black patch and the patched image with the black patch
     imageio.imwrite(save_path + 'original_with_black_patch.png', original_image_with_black_patch_uint8)
     imageio.imwrite(save_path + 'patched_image_with_black_patch.png', patched_image_with_black_patch_uint8)
-    
-    # Calculate SSIM for the non-patched areas
-    #non_patch_ssim = tf.reduce_mean(tf.image.ssim(original_image_with_black_patch_uint8, patched_image_with_black_patch_uint8, max_val=1.0)).numpy()
 
-    original_image = cv2.imread(save_path + 'original_with_black_patch.png', cv2.IMREAD_GRAYSCALE)
-    patched_image = cv2.imread(save_path + 'patched_image_with_black_patch.png', cv2.IMREAD_GRAYSCALE)
+    ssim_top_rectangle = ssim(original_top_rectangle, patched_top_rectangle, channel_axis=-1, data_range=255)
+    ssim_left_square = ssim(original_left_square, patched_left_square, channel_axis=-1, data_range=255)
+    ssim_right_square = ssim(original_right_square, patched_right_square, channel_axis=-1, data_range=255)
+    ssim_bottom_rectangle = ssim(original_bottom_rectangle, patched_bottom_rectangle, channel_axis=-1, data_range=255)
 
-    # Compute SSIM
-    non_patch_ssim = ssim(original_image, patched_image)
-    print("SSIM score of the image without the patch area is {0}".format(non_patch_ssim))
+    print(f'ssim_score of top_rectangle is {ssim_top_rectangle}')
+    print(f'ssim_score of left_square is {ssim_left_square}')
+    print(f'ssim_score of right_square is {ssim_right_square}')
+    print(f'ssim_score of bottom_rectangle is {ssim_bottom_rectangle}')
     
-    return non_patch_ssim
+    return (ssim_top_rectangle + ssim_left_square + ssim_right_square + ssim_bottom_rectangle)/4
 
 # FGSM attack to optimize the patch
 def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
@@ -173,7 +194,8 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
             max_loss = loss.numpy()
             best_patched_image = tf.identity(output_with_patch)
     
-    evaluate_ssim_impact(original_image, best_patched_image)
+    avg_ssim = evaluate_ssim_impact(original_image, best_patched_image, size)
+    print(f"Average ssim of the images is {avg_ssim}")
 
     return np.uint8(original_image*255.0), np.uint8(best_patched_image*255.0)
 
@@ -262,22 +284,22 @@ def main():
     print("Optimized patch generated and saved.")
 
 if __name__ == "__main__":
-    # main()
-    # img1 = load_original_image(current_path + orig_img_folder + "/" + input_file_name + ".jpg")
-    # image_path = current_path + "input_raw_images/" + input_file_name + ".png"
-    # image = load_raw_image(image_path)
+    main()
+    img1 = load_original_image(current_path + orig_img_folder + "/" + input_file_name + ".jpg")
+    image_path = current_path + "input_raw_images/" + input_file_name + ".png"
+    image = load_raw_image(image_path)
     
-    # model = load_model()
-    # img2,_,_,_,_ = model.predict(image)
-    # img2 = np.squeeze(img2, axis=0)
-    # img2 = np.uint8(img2 * 255.0)
+    model = load_model()
+    img2,_,_,_,_ = model.predict(image)
+    img2 = np.squeeze(img2, axis=0)
+    img2 = np.uint8(img2 * 255.0)
     
-    # img3 = load_original_image(current_path + res_folder + "/" + "patch_image_" + input_file_name + ".png")
-    # img4 = load_original_image(current_path + res_folder + "/" + "original_image_" + input_file_name + ".png")
+    img3 = load_original_image(current_path + res_folder + "/" + "patch_image_" + input_file_name + ".png")
+    img4 = load_original_image(current_path + res_folder + "/" + "original_image_" + input_file_name + ".png")
     
-    # print(ssim(img1, img1, channel_axis=-1, data_range=255))
-    # print(ssim(img1, img4, channel_axis=-1, data_range=255))
-    # print(ssim(img1, img3, channel_axis=-1, data_range=255))
+    print(ssim(img1, img1, channel_axis=-1, data_range=255))
+    print(ssim(img1, img4, channel_axis=-1, data_range=255))
+    print(ssim(img1, img3, channel_axis=-1, data_range=255))
     
     original_images_folder = current_path + orig_img_folder + "/" 
     raw_images_folder = current_path + "input_raw_images/"
