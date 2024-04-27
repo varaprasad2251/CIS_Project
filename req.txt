@@ -19,3 +19,4 @@ six==1.16.0
 tifffile==2024.2.12
 tzdata==2024.1
 ultralytics
+colour-demosaicing

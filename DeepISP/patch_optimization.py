@@ -8,12 +8,11 @@ import argparse
 import os
 from network import network
 import imageio.v2 as imageio
-from load_data import load_testing_inp
-import time
-import cv2
 from skimage.metrics import structural_similarity as ssim
 import pandas as pd
 from collections import defaultdict
+import matplotlib.pyplot as plt
+from colour_demosaicing import demosaicing_CFA_Bayer_bilinear as demosaic
 
 
 PATCH_HEIGHT, PATCH_WIDTH = 224, 224
@@ -61,22 +60,8 @@ def load_raw_image(image_path):
     return raw_img
 
 def save_image(patched_image, file_path):
-    # patched_image = np.uint8(patched_image * 255.0)  # Convert from [0, 1] to [0, 255]
     # print("JUST BEFORE IMAGEIO WRITE:", patched_image[0][0])
     imageio.imwrite(file_path, patched_image)
-
-# To process all the raw images from raw images folder and save output images in the results folder
-def process_raw_images(model):
-    raw_imgs = load_testing_inp(dataset_dir, 224, 224)
-    t1=time.time()
-    out,_,_,_,_ = model.predict(raw_imgs)
-    print(out.shape)
-    t2=time.time()
-    t = (t2-t1)/raw_imgs.shape[0]
-    print(t)
-    for i in range(out.shape[0]):
-        I = np.uint8(out[i,:,:,:] * 255.0)
-        imageio.imwrite(os.path.join(current_path, res_folder) + '/' +  str(i) + '.png', I)
 
 # To Load the DeepISP model with pre-trained weights
 def load_model():
@@ -92,9 +77,6 @@ def load_model():
 
 # To evaluate impact on SSIM between Original and Patched Image
 def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./DeepISP/masked_images/', is_original_pred=False):
-    # original_image = np.uint8(original_image*255.0)
-    # patched_image = np.uint8(patched_image*255.0)
-    # print("First Values inside SSIM Impact", original_image[0][0][0], patched_image[0][0][0])
     original_image = tf.cast(original_image, tf.float32)
     patched_image = tf.cast(patched_image, tf.float32)
     
@@ -150,34 +132,28 @@ def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./De
     ssim_left_square = ssim(original_left_square, patched_left_square, channel_axis=-1, data_range=255)
     ssim_right_square = ssim(original_right_square, patched_right_square, channel_axis=-1, data_range=255)
     ssim_bottom_rectangle = ssim(original_bottom_rectangle, patched_bottom_rectangle, channel_axis=-1, data_range=255)
-
-    print(f'ssim_score of top_rectangle is {ssim_top_rectangle}')
-    print(f'ssim_score of left_square is {ssim_left_square}')
-    print(f'ssim_score of right_square is {ssim_right_square}')
-    print(f'ssim_score of bottom_rectangle is {ssim_bottom_rectangle}')
     
     return (ssim_top_rectangle + ssim_left_square + ssim_right_square + ssim_bottom_rectangle)/4
 
 # FGSM attack to optimize the patch
 def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
     original_image,_,_,_,_ = model.predict(image)  # values would be in range [0,1]
-    print("Inside Function Original Image values: ", original_image[0][0][0])
     image_height, image_width = image.shape[1], image.shape[2]
     patch_ratio = (size ** 0.5) / 10
     patch_size = (int(image_height * patch_ratio), int(image_width * patch_ratio)) # To adjust Patch Size
 
-    # Patch Location - Centre of Image
+    # Patch Location
     top_left_x = (image_width - patch_size[0]) // 2
     top_left_y = (image_height - patch_size[1]) // 2
     image = tf.cast(image, tf.float32)
 
-    # patch = tf.Variable(tf.random.uniform([1, patch_size[1], patch_size[0], 4], dtype=tf.float32, minval=0, maxval=1))
     patch = tf.Variable(image[:, top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :], dtype=tf.float32)
     perturbation = tf.random.uniform(patch.shape, minval=-epsilon, maxval=epsilon, dtype=tf.float32)
     patch.assign(tf.clip_by_value(patch + perturbation, 0, 1))
     max_loss = float('-inf')
     best_patched_image = tf.identity(original_image)
-
+    best_patch = tf.identity(patch)
+    
     for i in range(max_iterations):
         with tf.GradientTape() as tape:
             tape.watch(patch)
@@ -189,47 +165,42 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
             patched_image = tf.tensor_scatter_nd_update(patched_image, indices, patch_values)
             output_with_patch,_, _, _, _ = model(patched_image, training=False)
             loss = 1 - tf.reduce_mean(tf.image.ssim(original_image[0], output_with_patch[0], max_val=1.0))
-            print(f"Current Iteration : {i+1}, " , "SSIM Score : ", tf.image.ssim(original_image[0], output_with_patch[0], max_val=1.0).numpy(), ", Loss : ", loss.numpy())
         gradients = tape.gradient(loss, patch)
         patch.assign_add(epsilon * tf.sign(gradients))
         patch.assign(tf.clip_by_value(patch, 0, 1))
         
         if loss.numpy() > loss_threshold:
-            print(f"Exceeded Loss Threshold ----- Exiting the Loop")
+            print(f"Exceeded Loss Threshold at iteration {i}----- Exiting the Loop")
             break
 
         if loss.numpy() > max_loss:
             max_loss = loss.numpy()
+            best_patch = tf.identity(patch)
             best_patched_image = tf.identity(output_with_patch)
     
-    # avg_ssim = evaluate_ssim_impact(original_image, best_patched_image, size)
-    # print(f"Average ssim of the images is {avg_ssim}")
-    # print("Inside Function: ", original_image[0][0], best_patched_image[0][0])
-    return np.uint8(original_image*255.0), np.uint8(best_patched_image*255.0)
+    return np.uint8(original_image*255.0), np.uint8(best_patched_image*255.0), np.uint8(best_patch*255.0)
 
 # Load raw image, generate optimize patch for the raw image. Save the processed images. 
 def patch_optimize_single_image(original_image_path, raw_image_path, file_name, epsilon, max_iterations, loss_threshold, patch_size):
-    print(raw_image_path, "\n", original_image_path)
     image = load_raw_image(raw_image_path)
+    original_image = load_original_image(original_image_path)
+    
     model = load_model() # Load DeepISP model
-    original_image_pred, patched_image_pred = fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, patch_size)
-    print("Outside FGSM Function:", original_image_pred[0][0][0], patched_image_pred[0][0][0])
+    original_image_pred, patched_image_pred, best_patch = fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, patch_size)
+    
     if tmp_path == 'true':
         tmp_folder = res_folder + "/tmp"
         output_path = os.path.join(current_path, tmp_folder) + '/'
     else:
         output_path = os.path.join(current_path, res_folder) + '/'
+    
     if not os.path.exists(output_path):
         os.makedirs(output_path)
-    # patched_image_pred = patched_image_pred[0,:,:,:]
-    # original_image_pred = original_image_pred[0,:,:,:]
-    # print("Values before Saving as images:", x[0][0], y[0][0])
+    
     save_image(patched_image_pred[0,:,:,:], output_path + "patch_image_" + file_name + ".png")
     save_image(original_image_pred[0,:,:,:], output_path + "original_image_" + file_name + ".png")
-    print("Optimized patch generated and saved.")
-    original_image = load_original_image(original_image_path)
-    print("Shapes", original_image.shape, original_image_pred.shape)
-    print("First Values", original_image_pred[0][0][0], patched_image_pred[0][0][0], original_image[0][0])
+    save_image(best_patch[0,:,:,:], output_path + "patch_" + file_name + ".png")
+    
     original_ssim = ssim(original_image, original_image_pred[0,:,:,:], channel_axis=-1, data_range=255)
     patch_pred_ssim = evaluate_ssim_impact(original_image_pred, patched_image_pred, size=patch_size, is_original_pred=True)
     patch_ssim = evaluate_ssim_impact(np.expand_dims(original_image, axis=0), patched_image_pred, size=patch_size)
@@ -257,7 +228,6 @@ def compute_ssim_for_folder(original_folder, raw_folder, epsilon, max_iterations
     original_files = [f for f in os.listdir(original_folder) if f.endswith('.png') or f.endswith('.jpg')]
     
     ssim_scores = []
-    model = load_model()
     for file_name in original_files:
         original_path = os.path.join(original_folder, file_name)
         base_name = os.path.splitext(file_name)[0]
@@ -273,25 +243,10 @@ def compute_ssim_for_folder(original_folder, raw_folder, epsilon, max_iterations
             print(f"Skipping {file_name}: No corresponding raw file found.")
             continue
         
-        # # Load images
-        # original_img = load_original_image(original_path)
-        # raw_img = load_raw_image(raw_path)
-
-        # # Predict or process the raw image
-        # img,_,_,_,_ = model.predict(raw_img)
-        # img = np.squeeze(img, axis=0)
-        # processed_img = np.uint8(img * 255.0)
-
-        # # Compute SSIM
-        # score1 = ssim(original_img, original_img, channel_axis=-1, data_range=255)
-        # score2 = ssim(original_img, processed_img, channel_axis=-1, data_range=255)
-        # ssim_scores.append({'Filename': file_name, 'Orig vs Orig': score1, 'Orig vs Proc': score2})
-        
-        result = patch_optimize_different_sizes(original_path, raw_path, input_file_name, epsilon, max_iterations, loss_threshold)
+        result = patch_optimize_different_sizes(original_path, raw_path, base_name, epsilon, max_iterations, loss_threshold)
         ssim_scores.append(result)
-    # results_df = pd.DataFrame(ssim_scores)
-    # print(results_df)
-    # print(f"SSIM for {file_name}: {score}")
+        print(f"Processed {file_name}")
+    print(f"Total size : {len(ssim_scores)}")
     agg_data = defaultdict(lambda: [np.array([0.0, 0.0, 0.0]), 0])
     for dict_item in ssim_scores:
         for key, value in dict_item.items():
@@ -302,15 +257,19 @@ def compute_ssim_for_folder(original_folder, raw_folder, epsilon, max_iterations
     # Calculate average
     for key in agg_data:
         final_data[key] = agg_data[key][0] / agg_data[key][1]
-
-    # Convert aggregated data to the format suitable for DataFrame
-    # final_data = {key: avg_tuple for key, (avg_tuple, _) in agg_data.items()}
-    # results_df = pd.DataFrame.from_dict(final_data, orient='index', columns=['orig vs orig_pred', 'orig vs patched', 'orig_pred vs patched'])
+    
     results_df = pd.DataFrame.from_dict(final_data, orient='index', columns=['orig vs orig_pred', 'orig vs patched', 'orig_pred vs patched'])
-    # print(results_df)
     return results_df
 
-
+def visualize_normalized_raw(raw_image):
+    combined_norm = np.mean(raw_image, axis=2)
+    plt.figure(figsize=(8, 6))
+    plt.imshow(combined_norm, cmap='rainbow')
+    plt.title('Combined Normalized RAW Channels')
+    plt.axis('off')
+    plt.show()
+    output_path = os.path.join(current_path, res_folder) + '/'
+    imageio.imwrite(output_path + "raw_image_visualized" + input_file_name + ".png", (combined_norm * 255).astype(np.uint8))
 
 def main():
     # ------- Parameters to control Patch Optimization -------- 
@@ -323,51 +282,12 @@ def main():
         original_images_folder = current_path + orig_img_folder + "/" 
         raw_images_folder = current_path + "input_raw_images/"
         ssim_table = compute_ssim_for_folder(original_images_folder, raw_images_folder, epsilon, max_iterations, loss_threshold)
-        print(ssim_table)
+        ssim_table.to_csv(current_path + "ssim_results.csv")
     else:
         raw_image_path = current_path + "input_raw_images/" + input_file_name + ".png"
         original_image_path = current_path + orig_img_folder + "/" + input_file_name + ".jpg"
         original_ssim, patch_ssim = patch_optimize_single_image(original_image_path, raw_image_path, input_file_name, epsilon, max_iterations, loss_threshold, patch_size)
         print(f"Original SSIM: {original_ssim}, Patch SSIM: {patch_ssim}")
-        # image = load_raw_image(image_path)
-        
-        # model = load_model() # Load DeepISP model
-
-        # original_image, patched_image = fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, patch_size)
-        # print("Outside FGSM Function:", original_image[0][0][0], patched_image[0][0][0])
-        # if tmp_path == 'true':
-        #     tmp_folder = res_folder + "/tmp"
-        #     output_path = os.path.join(current_path, tmp_folder) + '/'
-        # else:
-        #     output_path = os.path.join(current_path, res_folder) + '/'
-        # if not os.path.exists(output_path):
-        #     os.makedirs(output_path)
-        # x = patched_image[0,:,:,:] # * 255.0
-        # y = original_image[0,:,:,:] # * 255.0
-        # print("Values before Saving as images:", x[0][0], y[0][0])
-        # save_image(x, output_path + "patch_image_" + input_file_name + ".png")
-        # save_image(y, output_path + "original_image_" + input_file_name + ".png")
-        # print("Optimized patch generated and saved.")
 
 if __name__ == "__main__":
     main()
-    # img1 = load_original_image(current_path + orig_img_folder + "/" + input_file_name + ".jpg")
-    # image_path = current_path + "input_raw_images/" + input_file_name + ".png"
-    # image = load_raw_image(image_path)
-    
-    # model = load_model()
-    # img2,_,_,_,_ = model.predict(image)
-    # img2 = np.squeeze(img2, axis=0)
-    # img2 = np.uint8(img2 * 255.0)
-    
-    # img3 = load_original_image(current_path + res_folder + "/" + "patch_image_" + input_file_name + ".png")
-    # img4 = load_original_image(current_path + res_folder + "/" + "original_image_" + input_file_name + ".png")
-    
-    # print(ssim(img1, img1, channel_axis=-1, data_range=255))
-    # print(ssim(img1, img4, channel_axis=-1, data_range=255))
-    # print(ssim(img1, img3, channel_axis=-1, data_range=255))
-    
-    # original_images_folder = current_path + orig_img_folder + "/" 
-    # raw_images_folder = current_path + "input_raw_images/"
-    # ssim_table = compute_ssim_for_folder(original_images_folder, raw_images_folder)
-    # print(ssim_table)
