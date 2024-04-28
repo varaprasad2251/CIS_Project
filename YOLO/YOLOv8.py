@@ -2,7 +2,7 @@ from ultralytics import YOLO
 import os
 import argparse
 import json
-
+import pandas as pd
 parser = argparse.ArgumentParser()
 
 parser.add_argument('-in' ,'--input_file_name', type = str, default = '0' , help = 'input image file name')
@@ -20,6 +20,89 @@ current_path = args.main_path
 orig_img_folder = args.orig_images_folder
 
 # model.train(data='coco128.yaml', epochs=3)  # Uncomment to train the model
+
+class_id_to_name = {
+    0: 'person',
+    1: 'bicycle',
+    2: 'car',
+    3: 'motorcycle',
+    4: 'airplane',
+    5: 'bus',
+    6: 'train',
+    7: 'truck',
+    8: 'boat',
+    9: 'traffic light',
+    10: 'fire hydrant',
+    11: 'stop sign',
+    12: 'parking meter',
+    13: 'bench',
+    14: 'bird',
+    15: 'cat',
+    16: 'dog',
+    17: 'horse',
+    18: 'sheep',
+    19: 'cow',
+    20: 'elephant',
+    21: 'bear',
+    22: 'zebra',
+    23: 'giraffe',
+    24: 'backpack',
+    25: 'umbrella',
+    26: 'handbag',
+    27: 'tie',
+    28: 'suitcase',
+    29: 'frisbee',
+    30: 'skis',
+    31: 'snowboard',
+    32: 'sports ball',
+    33: 'kite',
+    34: 'baseball bat',
+    35: 'baseball glove',
+    36: 'skateboard',
+    37: 'surfboard',
+    38: 'tennis racket',
+    39: 'bottle',
+    40: 'wine glass',
+    41: 'cup',
+    42: 'fork',
+    43: 'knife',
+    44: 'spoon',
+    45: 'bowl',
+    46: 'banana',
+    47: 'apple',
+    48: 'sandwich',
+    49: 'orange',
+    50: 'broccoli',
+    51: 'carrot',
+    52: 'hot dog',
+    53: 'pizza',
+    54: 'donut',
+    55: 'cake',
+    56: 'chair',
+    57: 'couch',
+    58: 'potted plant',
+    59: 'bed',
+    60: 'dining table',
+    61: 'toilet',
+    62: 'tv',
+    63: 'laptop',
+    64: 'mouse',
+    65: 'remote',
+    66: 'keyboard',
+    67: 'cell phone',
+    68: 'microwave',
+    69: 'oven',
+    70: 'toaster',
+    71: 'sink',
+    72: 'refrigerator',
+    73: 'book',
+    74: 'clock',
+    75: 'vase',
+    76: 'scissors',
+    77: 'teddy bear',
+    78: 'hair drier',
+    79: 'toothbrush'
+}
 
 def compute_confidence_scores_for_folder(original_folder, pred_folder):
     """
@@ -56,18 +139,40 @@ def compute_confidence_scores_for_folder(original_folder, pred_folder):
         # confidence_scores.append({file_name: confidence_score})
         total_confidence_scores.append(confidence_scores)
 
+    # Group by image with lists of classes and confidences
+    grouped_data = {}
+    for entry in total_confidence_scores:
+        for image_path, details in entry.items():
+            if image_path not in grouped_data:
+                grouped_data[image_path] = {'Class': [], 'Confidence': []}
+            grouped_data[image_path]['Class'].extend(details['class'])
+            grouped_data[image_path]['Confidence'].extend(details['confidence'])
 
-    # results_df = pd.DataFrame.from_dict(final_data, orient='index', columns=['orig vs orig_pred', 'orig vs patched', 'orig_pred vs patched'])
-    # print(results_df)
-    return total_confidence_scores
+    # Flatten the grouped data
+    flattened_grouped_data = []
+    for image_path, details in grouped_data.items():
+        flattened_grouped_data.append({
+            'Image': image_path,
+            'Class': details['Class'],
+            'Confidence': details['Confidence']
+        })
+
+    # Convert to pandas DataFrame
+    df_grouped = pd.DataFrame(flattened_grouped_data)
+    df_grouped['Class'] = df_grouped['Class'].apply(lambda classes: [class_id_to_name.get(int(cl), 'Unknown') for cl in classes])
+    # print(df_grouped)
+    
+    return total_confidence_scores, df_grouped
 
 def main():
     if process_folder == 'true':
         original_folder = current_path + orig_img_folder + "/" 
         pred_folder = current_path + "patch_results" + "/"
-        confidence_scores = compute_confidence_scores_for_folder(original_folder, pred_folder)
+        confidence_scores, df = compute_confidence_scores_for_folder(original_folder, pred_folder)
         # print(confidence_scores)
-        print(json.dumps(confidence_scores, indent=4))
+        # print(json.dumps(confidence_scores, indent=4))
+        print(df)
+        df.to_csv(os.getcwd() + "/"+ "YOLO/results/results.csv")
     else:
         if tmp_path == 'true':
                 image_path = os.getcwd() + "/" + "DeepISP/patch_results/tmp/"
