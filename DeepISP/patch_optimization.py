@@ -12,7 +12,6 @@ from skimage.metrics import structural_similarity as ssim
 import pandas as pd
 from collections import defaultdict
 import matplotlib.pyplot as plt
-from colour_demosaicing import demosaicing_CFA_Bayer_bilinear as demosaic
 
 
 PATCH_HEIGHT, PATCH_WIDTH = 224, 224
@@ -27,6 +26,9 @@ parser.add_argument('-orig' ,'--orig_images_folder', type = str, default = 'Zuri
 parser.add_argument('-in' ,'--input_file_name', type = str, default = '663' , help = 'input image file name')
 parser.add_argument('-tmp' ,'--tmp_path', type = str, default = 'false' , help = 'if output images need to be stored in results/tmp path')
 parser.add_argument('-pf' ,'--process_folder', type = str, default = 'false' , help = 'To process whole folder or single image')
+parser.add_argument('-pos_x' , '--position_x', type = int, default = None, help = 'X coordinate of Patch start position')
+parser.add_argument('-pos_y', '--position_y', type = int, default = None, help = 'Y coordinate of Patch start position')
+parser.add_argument('-size', '--patch_size', type = int, default = 10, help = "Percentage of patch in the total image size")
 
 args = parser.parse_args()
 weights_file = args.weights_file
@@ -37,6 +39,9 @@ orig_img_folder = args.orig_images_folder
 input_file_name = args.input_file_name
 tmp_path = args.tmp_path
 process_folder = args.process_folder
+position_x = args.position_x
+position_y = args.position_y
+size = args.patch_size
 
 def clip_eps(tensor, eps):
 	# clip the values of the tensor to a given range and return it
@@ -76,7 +81,7 @@ def load_model():
     return d_model
 
 # To evaluate impact on SSIM between Original and Patched Image
-def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./DeepISP/masked_images/', is_original_pred=False):
+def evaluate_ssim_impact(original_image, patched_image, file_name, size=10, path='./DeepISP/masked_images/', is_original_pred=False):
     original_image = tf.cast(original_image, tf.float32)
     patched_image = tf.cast(patched_image, tf.float32)
     
@@ -146,15 +151,19 @@ def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./De
     return (ssim_top_rectangle + ssim_left_square + ssim_right_square + ssim_bottom_rectangle)/4
 
 # FGSM attack to optimize the patch
-def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
+def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, pos_x, pos_y, size=10):
     original_image,_,_,_,_ = model.predict(image)  # values would be in range [0,1]
     image_height, image_width = image.shape[1], image.shape[2]
     patch_ratio = (size ** 0.5) / 10
     patch_size = (int(image_height * patch_ratio), int(image_width * patch_ratio)) # To adjust Patch Size
 
-    # Patch Location
-    top_left_x = (image_width - patch_size[0]) // 2
-    top_left_y = (image_height - patch_size[1]) // 2
+    if pos_x is None and pos_y is None:
+        # Patch Location - Centre of Image
+        top_left_x = (image_width - patch_size[0]) // 2
+        top_left_y = (image_height - patch_size[1]) // 2
+    else:
+        top_left_x = pos_x
+        top_left_y = pos_y
     image = tf.cast(image, tf.float32)
 
     patch = tf.Variable(image[:, top_left_y:top_left_y + patch_size[1], top_left_x:top_left_x + patch_size[0], :], dtype=tf.float32)
@@ -191,13 +200,14 @@ def fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, size=10):
     return np.uint8(original_image*255.0), np.uint8(best_patched_image*255.0), np.uint8(best_patch*255.0)
 
 # Load raw image, generate optimize patch for the raw image. Save the processed images. 
-def patch_optimize_single_image(original_image_path, raw_image_path, file_name, epsilon, max_iterations, loss_threshold, patch_size):
+def patch_optimize_single_image(original_image_path, raw_image_path, file_name, epsilon, max_iterations, loss_threshold, patch_size, pos_x = None, pos_y = None):
+    print(raw_image_path, "\n", original_image_path)
     image = load_raw_image(raw_image_path)
     original_image = load_original_image(original_image_path)
     
     model = load_model() # Load DeepISP model
-    original_image_pred, patched_image_pred, best_patch = fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, patch_size)
-    
+    original_image_pred, patched_image_pred, best_patch = fgsm_patch(image, model, epsilon, max_iterations, loss_threshold, pos_x, pos_y, patch_size)
+    print("Outside FGSM Function:", original_image_pred[0][0][0], patched_image_pred[0][0][0])
     if tmp_path == 'true':
         tmp_folder = res_folder + "/tmp"
         output_path = os.path.join(current_path, tmp_folder) + '/'
@@ -285,8 +295,8 @@ def main():
     # ------- Parameters to control Patch Optimization -------- 
     epsilon = 0.1 / 255.0  # Perturbation level
     max_iterations = 15 # Max Iterations for FGSM
-    loss_threshold = 0.01 # Loss Threshold
-    patch_size = 20 # Percentage of patch in the total image size.
+    loss_threshold = 0.02 # Loss Threshold
+    # patch_size = 20 # Percentage of patch in the total image size.
     
     if process_folder == 'true':
         original_images_folder = current_path + orig_img_folder + "/" 
@@ -296,7 +306,7 @@ def main():
     else:
         raw_image_path = current_path + "input_raw_images/" + input_file_name + ".png"
         original_image_path = current_path + orig_img_folder + "/" + input_file_name + ".jpg"
-        original_ssim, patch_ssim, patch_pred_ssim = patch_optimize_single_image(original_image_path, raw_image_path, input_file_name, epsilon, max_iterations, loss_threshold, patch_size)
+        original_ssim, patch_ssim, patch_pred_ssim = patch_optimize_single_image(original_image_path, raw_image_path, input_file_name, epsilon, max_iterations, loss_threshold, size, position_x, position_y)
         print(f"Original SSIM: {original_ssim}, Patch SSIM: {patch_ssim}, Processed Patch SSIM: {patch_pred_ssim}")
 
 if __name__ == "__main__":
