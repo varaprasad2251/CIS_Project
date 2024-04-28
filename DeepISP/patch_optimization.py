@@ -87,6 +87,16 @@ def evaluate_ssim_impact(original_image, patched_image, size=10, save_path='./De
     top_left_x = (image_width - patch_size[0]) // 2
     top_left_y = (image_height - patch_size[1]) // 2
     black_patch = np.zeros((patch_size[1], patch_size[0], 3), dtype=np.uint8) * 255
+
+    if is_original_pred:
+        save_path = f'{path}Predicted/{file_name}/{file_name}_{size}/'
+    else:
+        save_path = f'{path}Original/{file_name}/{file_name}_{size}/'
+
+    
+
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
     
     # Overlay the black patch on the original image
     original_image_with_black_patch = original_image[0].numpy()
@@ -202,8 +212,8 @@ def patch_optimize_single_image(original_image_path, raw_image_path, file_name, 
     save_image(best_patch[0,:,:,:], output_path + "patch_" + file_name + ".png")
     
     original_ssim = ssim(original_image, original_image_pred[0,:,:,:], channel_axis=-1, data_range=255)
-    patch_pred_ssim = evaluate_ssim_impact(original_image_pred, patched_image_pred, size=patch_size, is_original_pred=True)
-    patch_ssim = evaluate_ssim_impact(np.expand_dims(original_image, axis=0), patched_image_pred, size=patch_size)
+    patch_pred_ssim = evaluate_ssim_impact(original_image_pred, patched_image_pred, file_name, size=patch_size, is_original_pred=True)
+    patch_ssim = evaluate_ssim_impact(np.expand_dims(original_image, axis=0), patched_image_pred, file_name, size=patch_size, is_original_pred=False)
     return original_ssim, patch_ssim, patch_pred_ssim
 
 
@@ -286,8 +296,8 @@ def main():
     else:
         raw_image_path = current_path + "input_raw_images/" + input_file_name + ".png"
         original_image_path = current_path + orig_img_folder + "/" + input_file_name + ".jpg"
-        original_ssim, patch_ssim = patch_optimize_single_image(original_image_path, raw_image_path, input_file_name, epsilon, max_iterations, loss_threshold, patch_size)
-        print(f"Original SSIM: {original_ssim}, Patch SSIM: {patch_ssim}")
+        original_ssim, patch_ssim, patch_pred_ssim = patch_optimize_single_image(original_image_path, raw_image_path, input_file_name, epsilon, max_iterations, loss_threshold, patch_size)
+        print(f"Original SSIM: {original_ssim}, Patch SSIM: {patch_ssim}, Processed Patch SSIM: {patch_pred_ssim}")
 
 if __name__ == "__main__":
     main()
