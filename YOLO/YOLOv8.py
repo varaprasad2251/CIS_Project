@@ -185,7 +185,7 @@ def main():
         result_paths = [save_dir + name + "_" + input_file_name + ".png" for name in ["original_image", "patch_image"]]
         if not os.path.exists(save_dir):
                 os.makedirs(save_dir)
-
+        model = YOLO('yolov8n.pt')
         results = model(imgs) # Predictions
         idx = 0
         for result in results:

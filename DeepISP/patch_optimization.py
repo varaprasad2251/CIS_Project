@@ -295,7 +295,7 @@ def main():
     # ------- Parameters to control Patch Optimization -------- 
     epsilon = 0.1 / 255.0  # Perturbation level
     max_iterations = 15 # Max Iterations for FGSM
-    loss_threshold = 0.02 # Loss Threshold
+    loss_threshold = 0.08 # Loss Threshold
     # patch_size = 20 # Percentage of patch in the total image size.
     
     if process_folder == 'true':
